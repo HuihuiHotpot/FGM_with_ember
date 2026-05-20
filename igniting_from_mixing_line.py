@@ -5,6 +5,7 @@ Restart runs from completed inert mixing-line profiles.
 import csv
 import os
 import re
+import shutil
 import threading
 import time
 import traceback
@@ -21,7 +22,10 @@ ct.suppress_thermo_warnings()
 fuel = "C10H22:0.5088, C8H18:0.1141, MCH:0.1667, C7H8:0.2104"
 oxidizer = "N2:3.76, O2:1.0"
 Tfuel = 373
-status_header = ["time", "case_id", "case", "status", "seconds", "output", "message"]
+status_header = [
+    "time", "case_id", "case", "status", "seconds",
+    "global_timestep", "output", "message"
+]
 
 case_pattern = re.compile(
     r"^T=(?P<T>[-+0-9.eE]+) K_p=(?P<p_bar>[-+0-9.eE]+) bar_a=(?P<a>[-+0-9.eE]+) s-1$"
@@ -108,6 +112,13 @@ def write_error_file(output_dir, case_name, exc):
     return error_file
 
 
+def remove_case_output_dir(output_dir):
+    output_dir = Path(output_dir)
+
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+
+
 def run_one_case(task):
     (
         case_id,
@@ -121,6 +132,7 @@ def run_one_case(task):
         t_end,
         global_timestep,
         ignition_root,
+        clean_output_dir,
     ) = task
 
     pressure = p_bar * 1e5
@@ -140,12 +152,16 @@ def run_one_case(task):
                 console_print(f"Still running case {case_id}: {case_name} ({elapsed_min:.1f} min), log: {log_file}")
 
     try:
+        if clean_output_dir:
+            remove_case_output_dir(output_dir)
+
         if case_completed(output_dir):
             return {
                 "case_id": case_id,
                 "case": case_name,
                 "status": "SKIPPED_COMPLETED",
                 "seconds": 0.0,
+                "global_timestep": global_timestep,
                 "output": str(output_dir),
                 "message": "case already completed",
             }
@@ -195,6 +211,7 @@ def run_one_case(task):
             "case": case_name,
             "status": "SUCCESS",
             "seconds": time.time() - start_time,
+            "global_timestep": global_timestep,
             "output": str(output_dir),
             "message": "",
         }
@@ -208,6 +225,7 @@ def run_one_case(task):
             "case": case_name,
             "status": "FAILED",
             "seconds": time.time() - start_time,
+            "global_timestep": global_timestep,
             "output": str(output_dir),
             "message": f"{type(exc).__name__}: {exc}; details: {error_file}",
         }
@@ -222,6 +240,7 @@ def append_status(status_file, result):
             result["case"],
             result["status"],
             f"{result['seconds']:.3f}",
+            f"{result['global_timestep']:.3e}",
             result["output"],
             result["message"],
         ])
@@ -229,12 +248,25 @@ def append_status(status_file, result):
 
 def ensure_status_file(status_file):
     status_file.parent.mkdir(parents=True, exist_ok=True)
-    if status_file.exists():
+    if not status_file.exists():
+        with status_file.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(status_header)
+        return
+
+    with status_file.open("r", newline="", encoding="utf-8-sig") as handle:
+        reader = csv.DictReader(handle)
+        existing_header = reader.fieldnames or []
+        rows = list(reader)
+
+    if existing_header == status_header:
         return
 
     with status_file.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(status_header)
+        writer = csv.DictWriter(handle, fieldnames=status_header)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({name: row.get(name, "") for name in status_header})
 
 
 def latest_status_by_case(status_file):
@@ -284,6 +316,7 @@ if __name__ == "__main__":
 
     case_selection = "all"  # "all" or "failed"
     case_glob = "*"
+    clean_output_dirs = case_selection == "failed"
 
     # ==================== Case discovery ====================
     cases = find_cases(
@@ -315,6 +348,7 @@ if __name__ == "__main__":
             t_end,
             global_timestep,
             str(ignition_root),
+            clean_output_dirs,
         ))
 
     success_count = 0
@@ -340,6 +374,7 @@ if __name__ == "__main__":
                 t_end,
                 global_timestep,
                 ignition_root_text,
+                clean_output_dir,
             ) = task
 
             try:
@@ -350,6 +385,7 @@ if __name__ == "__main__":
                     "case": case_name,
                     "status": "FAILED",
                     "seconds": 0.0,
+                    "global_timestep": global_timestep,
                     "output": str(Path(ignition_root_text) / case_name),
                     "message": repr(exc) + "\n" + traceback.format_exc(),
                 }
