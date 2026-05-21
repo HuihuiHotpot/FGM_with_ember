@@ -325,6 +325,10 @@ if __name__ == "__main__":
     )
     cases = select_cases_by_status(cases, status_file, case_selection)
 
+    if case_selection == "failed" and not cases:
+        console_print("All cases completed successfully. No failed cases to rerun.")
+        raise SystemExit(0)
+
     console_print(f"Total selected restart cases: {len(cases)}")
     console_print(f"Case selection: {case_selection}")
     console_print(f"Global timestep: {global_timestep:.3e} s")
