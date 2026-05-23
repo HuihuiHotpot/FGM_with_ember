@@ -17,13 +17,14 @@ RUN_ROOT = Path(r"E:\FGM\run\igniting_from_mixing_line")
 OUTPUT_ROOT = Path(r"F:\profiles_before_refine_start")
 
 PROFILE_GLOB = "prof[0-9][0-9][0-9][0-9][0-9][0-9].h5"
+CONFIG_FILE_NAME = "config"
 START_TIME_COLUMN = "suggested_refine_start_ms"
 CASE_COLUMN = "case"
 STATUS_COLUMN = "status"
 REQUIRED_STATUS = "ok"
 
-# Existing copied profile files are skipped by default, so rerunning the script
-# is cheap and non-destructive.
+# Existing copied profile/config files are overwritten by default, so rerunning
+# the script refreshes the copied pre-refine package.
 OVERWRITE_EXISTING_FILES = True
 
 # Copy the source CSV into OUTPUT_ROOT for traceability.
@@ -88,6 +89,16 @@ def copy_one_case(
     output_case_dir.mkdir(parents=True, exist_ok=True)
     selected_rows: list[list[object]] = []
 
+    source_config = case_dir / CONFIG_FILE_NAME
+    copied_config = output_case_dir / CONFIG_FILE_NAME
+    if not source_config.exists():
+        raise FileNotFoundError(f"case config not found: {source_config}")
+    if not copied_config.exists() or OVERWRITE_EXISTING_FILES:
+        shutil.copy2(source_config, copied_config)
+        config_copy_status = "copied"
+    else:
+        config_copy_status = "skipped_existing"
+
     copied_count = 0
     skipped_existing_count = 0
     scanned_count = 0
@@ -129,8 +140,8 @@ def copy_one_case(
             ]
         )
 
-    manifest_path = output_case_dir / "_selected_profiles.csv"
-    with manifest_path.open("w", newline="", encoding="utf-8-sig") as handle:
+    selected_profiles_csv = output_case_dir / "_selected_profiles.csv"
+    with selected_profiles_csv.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.writer(handle)
         writer.writerow(
             [
@@ -158,7 +169,10 @@ def copy_one_case(
         "first_profile_time_ms": first_time_ms,
         "last_copied_profile_time_ms": last_copied_time_ms,
         "next_profile_time_ms": next_profile_time_ms,
-        "manifest": str(manifest_path),
+        "selected_profiles_csv": str(selected_profiles_csv),
+        "source_config": str(source_config),
+        "copied_config": str(copied_config),
+        "config_copy_status": config_copy_status,
         "message": "",
     }
 
@@ -253,7 +267,10 @@ def main() -> int:
         "first_profile_time_ms",
         "last_copied_profile_time_ms",
         "next_profile_time_ms",
-        "manifest",
+        "selected_profiles_csv",
+        "source_config",
+        "copied_config",
+        "config_copy_status",
         "message",
     ]
     failed_columns = ["case", "error_type", "message"]
