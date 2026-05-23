@@ -17,15 +17,15 @@ import matplotlib.pyplot as plt
 
 # ==================== User-editable settings ====================
 
-INPUT_DIR = Path(r"G:\试跑\igniting_from_mixing_line\后处理\_ignited_out_h5")
-OUTPUT_DIR = Path(r"G:\试跑\igniting_from_mixing_line\后处理\_Q_peak_analysis")
+INPUT_DIR = Path(r"G:\FGM\igniting_from_mixing_line\粗算\后处理\_ignited_out_h5")
+OUTPUT_DIR = Path(r"G:\FGM\igniting_from_mixing_line\粗算\后处理\_Q_peak_analysis")
 
 # Thresholds are fractions of Qplus_max. For example, 0.5 means half maximum.
 THRESHOLDS = [0.01, 0.02, 0.05, 0.10, 0.20, 0.50, 0.80, 0.90]
 
 # Suggested dense sampling interval:
 #   target_points_across_width_50 = 20 means roughly 20 samples across FWHM.
-TARGET_POINTS_ACROSS_WIDTH_50 = 40
+TARGET_POINTS_ACROSS_WIDTH_50 = 30
 
 # Optional bounds for suggested_profile_dt_s. Leave as None to report the
 # value directly implied by width_Q0.5_s / TARGET_POINTS_ACROSS_WIDTH_50.
@@ -33,13 +33,16 @@ MIN_SUGGESTED_PROFILE_DT_S: float | None = None
 MAX_SUGGESTED_PROFILE_DT_S: float | None = None
 
 # Suggested refine window around the Q peak.
-# Q10 is used for the dense refine window:
-#   start = t_Q0.1_rise - WINDOW_MARGIN_MS
-#   end   = last t_Q0.1_fall + WINDOW_MARGIN_MS
+# Q05 is used for the dense refine window:
+#   start = t_Q0.05_rise - WINDOW_MARGIN_MS
+#   end   = last t_Q0.05_fall + WINDOW_MARGIN_MS
+# If Q05 never falls back below the threshold, fall back to Q10 fall before
+# using t_Qmax. This avoids cutting off the clearly resolved Q10 decay tail.
 #
 # Q50 is still used below for suggested_profile_dt_s through width_Q0.5_s.
-WINDOW_LOW_THRESHOLD = 0.10
-WINDOW_MARGIN_MS = 0.005
+WINDOW_LOW_THRESHOLD = 0.05
+WINDOW_MARGIN_MS = 0.01
+REFINE_END_FALLBACK_THRESHOLD = 0.10
 
 # Plot outputs. The script writes one case plot per H5 file plus summary plots.
 MAKE_CASE_PLOTS = True
@@ -49,7 +52,7 @@ CASE_PLOT_DPI = 180
 MAX_CASE_PLOTS: int | None = None
 
 # These levels are highlighted in each case plot.
-PLOT_WIDTH_LEVELS = [0.50, 0.10]
+PLOT_WIDTH_LEVELS = [0.50, 0.05]
 PLOT_ZOOM_EXTRA_FRACTION = 0.25
 PLOT_ZOOM_MIN_EXTRA_MS = 0.01
 
@@ -227,12 +230,20 @@ def analyze_file(path: Path) -> dict[str, object]:
         refine_start_ms = max(0.0, low_rise * 1.0e3 - WINDOW_MARGIN_MS)
 
     if low_fall is None:
-        refine_end_ms = t_qmax * 1.0e3 + WINDOW_MARGIN_MS
+        _, fallback_fall = crossings.get(REFINE_END_FALLBACK_THRESHOLD, (None, None))
+        if fallback_fall is None:
+            refine_end_ms = t_qmax * 1.0e3 + WINDOW_MARGIN_MS
+            refine_end_source = "t_Qmax"
+        else:
+            refine_end_ms = fallback_fall * 1.0e3 + WINDOW_MARGIN_MS
+            refine_end_source = f"t_Q{REFINE_END_FALLBACK_THRESHOLD:g}_fall"
     else:
         refine_end_ms = low_fall * 1.0e3 + WINDOW_MARGIN_MS
+        refine_end_source = f"t_Q{WINDOW_LOW_THRESHOLD:g}_fall"
 
     result["suggested_refine_start_ms"] = refine_start_ms
     result["suggested_refine_end_ms"] = refine_end_ms
+    result["suggested_refine_end_source"] = refine_end_source
     refine_duration_ms = refine_end_ms - refine_start_ms
     refine_duration_s = refine_duration_ms * 1.0e-3
     result["suggested_refine_duration_ms"] = refine_duration_ms
@@ -278,6 +289,7 @@ def write_metrics(rows: list[dict[str, object]], path: Path) -> None:
         "estimated_Q50_samples",
         "suggested_refine_start_ms",
         "suggested_refine_end_ms",
+        "suggested_refine_end_source",
         "suggested_refine_duration_ms",
         "case_plot",
     ]
